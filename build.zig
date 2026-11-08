@@ -1,0 +1,31 @@
+const std = @import("std");
+
+pub fn build(b: *std.Build) void {
+    const target = b.standardTargetOptions(.{});
+    const optimzie = b.standardOptimizeOption(.{});
+
+    const mod = b.addModule("lion", .{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = optimzie,
+    });
+
+    const exe = b.addExecutable(.{
+        .name = "lion",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimzie,
+            .imports = &.{
+                .{ .name = "lion", .module = mod },
+            },
+        }),
+    });
+
+    b.installArtifact(exe);
+    const run_step = b.step("run", "Executable lion");
+    const run_cmd = b.addRunArtifact(exe);
+    run_step.dependOn(&run_cmd.step);
+    run_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |args| run_cmd.addArgs(args);
+}
