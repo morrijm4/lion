@@ -1,64 +1,35 @@
 const std = @import("std");
+const Io = std.Io;
 const lion = @import("lion");
 
-const Node = lion.Ast.Node;
-const Literal = lion.Ast.Literal;
-const Parent = lion.Ast.Parent;
+pub fn main(init: std.process.Init) !void {
+    var stdout_buf: [1024]u8 = undefined;
+    var input_buf: [1024]u8 = undefined;
+    var ast_buf: [1024]u8 = undefined;
 
-const print = std.debug.print;
+    const stdout_file = Io.File.stdout();
+    var stdout_writer = stdout_file.writer(init.io, &stdout_buf);
+    const stdout = &stdout_writer.interface;
 
-pub fn main() !void {
-    var himom: Literal = .{
-        .node = .{ .text = {} },
-        .value = "Hi, mom!",
-    };
+    const args = try init.minimal.args.toSlice(init.arena.allocator());
 
-    var title: Literal = .{
-        .node = .{ .text = {} },
-        .value = "This is my family",
-    };
+    if (args.len != 2) {
+        try help(stdout);
+        return try stdout.flush();
+    }
 
-    var arr = [_]*Node{&title.node};
-    const ns: []*Node = &arr;
-    var mother: Parent = .{
-        .node = .{ .heading = .{ .depth = 3 } },
-        .children = ns,
-    };
+    const input_file = try Io.Dir.cwd().openFile(init.io, args[1], .{});
+    var input_reader = input_file.reader(init.io, &input_buf);
+    const reader = &input_reader.interface;
 
-    const nodes: [2]*Node = .{
-        &mother.node,
-        &himom.node,
-    };
+    var fba = std.heap.FixedBufferAllocator.init(&ast_buf);
+    const ast = try lion.Ast.build(reader, &fba);
 
-    for (nodes) |node| printNode(node);
+    const html_renderer = lion.Html.init(.{});
+    try html_renderer.render(&ast, stdout);
+    try stdout.flush();
 }
 
-fn printNode(node: *Node) void {
-    if (node.isParent()) {
-        const parent = node.asParent();
-
-        switch (parent.node) {
-            .heading => |h| {
-                for (0..h.depth) |_| print("#", .{});
-                print(" ", .{});
-            },
-            else => {},
-        }
-
-        for (parent.children) |child| {
-            printNode(child);
-        }
-        return;
-    }
-
-    if (node.isLiteral()) {
-        const literal = node.asLiteral();
-        switch (literal.node) {
-            .text => print("{s}\n", .{literal.value}),
-            else => {},
-        }
-        return;
-    }
-
-    unreachable;
+fn help(w: *Io.Writer) Io.Writer.Error!void {
+    try w.writeAll("USAGE: lion <filename>\n");
 }

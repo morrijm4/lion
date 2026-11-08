@@ -8,11 +8,10 @@ pub const Ast = @This();
 
 root: Root,
 
-const BuildError = Io.Reader.LimitedAllocError;
+pub const BuildError = Io.Reader.LimitedAllocError;
 
 pub fn build(r: *Io.Reader, fba: *FixedBufferAllocator) BuildError!Ast {
     const gpa = fba.allocator();
-    errdefer fba.reset();
 
     var ast: Ast = .{
         .root = .init(),
@@ -21,10 +20,10 @@ pub fn build(r: *Io.Reader, fba: *FixedBufferAllocator) BuildError!Ast {
     const paragraph = try Parent.create(gpa, Paragraph);
     try ast.root.base.append(gpa, .from(paragraph));
 
-    var value: std.ArrayList(u8) = .empty;
-    try r.appendRemaining(gpa, &value, .limited(1024 * 1024));
+    const value = try r.allocRemaining(gpa, .limited64(1024));
+    std.mem.replaceScalar(u8, value, '\n', ' ');
 
-    const text = try Literal.create(gpa, Text, value.items);
+    const text = try Literal.create(gpa, Text, value);
     try paragraph.base.append(gpa, .from(text));
 
     return ast;
@@ -263,12 +262,13 @@ test "it can parse a paragraph" {
     var fba = FixedBufferAllocator.init(try gpa.alloc(u8, 1024));
     defer gpa.free(fba.buffer);
 
-    const article =
-        \\ This is my new paragraph
-        \\ I have written in markdown
+    const input =
+        \\This is my new paragraph
+        \\I have written in markdown
     ;
+    const expected = "This is my new paragraph I have written in markdown";
 
-    var reader = Io.Reader.fixed(article);
+    var reader = Io.Reader.fixed(input);
 
     const ast = try Ast.build(&reader, &fba);
 
@@ -276,5 +276,5 @@ test "it can parse a paragraph" {
 
     const paragraph = ast.root.base.children.items[0].asParagraph();
     const text = paragraph.base.children.items[0].asText();
-    try std.testing.expectEqualStrings(article, text.base.value);
+    try std.testing.expectEqualStrings(expected, text.base.value);
 }
