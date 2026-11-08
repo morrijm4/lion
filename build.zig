@@ -22,10 +22,17 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    // Run step
     b.installArtifact(exe);
     const run_step = b.step("run", "Executable lion");
     const run_cmd = b.addRunArtifact(exe);
     run_step.dependOn(&run_cmd.step);
     run_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| run_cmd.addArgs(args);
+
+    // Test step
+    const mod_tests = b.addTest(.{ .root_module = mod });
+    const run_mod_tests = b.addRunArtifact(mod_tests);
+    const test_step = b.step("test", "Run tests");
+    test_step.dependOn(&run_mod_tests.step);
 }
