@@ -1,7 +1,6 @@
 const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
-const FixedBufferAllocator = std.heap.FixedBufferAllocator;
 const assert = std.debug.assert;
 
 pub const Ast = @This();
@@ -10,9 +9,7 @@ root: Root,
 
 pub const BuildError = Io.Reader.LimitedAllocError;
 
-pub fn build(r: *Io.Reader, fba: *FixedBufferAllocator) BuildError!Ast {
-    const gpa = fba.allocator();
-
+pub fn build(r: *Io.Reader, gpa: Allocator) BuildError!Ast {
     var ast: Ast = .{
         .root = .init(),
     };
@@ -27,6 +24,10 @@ pub fn build(r: *Io.Reader, fba: *FixedBufferAllocator) BuildError!Ast {
     try paragraph.base.append(gpa, .from(text));
 
     return ast;
+}
+
+pub fn deinit(self: *const Ast, gpa: Allocator) void {
+    self.root.base.deinit(gpa);
 }
 
 pub const Type = enum {
@@ -71,6 +72,21 @@ pub const Node = union(Type) {
             return from(&ptr.base);
         } else {
             @compileError("Expected Node type, got " ++ @typeName(T));
+        }
+    }
+
+    pub fn deinit(self: *const Node, gpa: Allocator) void {
+        if (self.isLiteral()) {
+            self.asLiteral().deinit(gpa);
+        } else if (self.isParent()) {
+            self.asParent().deinit(gpa);
+        }
+
+        switch (self.*) {
+            .text => gpa.destroy(self.asText()),
+            .paragraph => gpa.destroy(self.asParagraph()),
+            .root => gpa.destroy(self.asRoot()),
+            else => @panic("Not implemented"),
         }
     }
 
@@ -156,6 +172,10 @@ pub const Literal = struct {
         };
     }
 
+    pub fn deinit(self: *const Literal, gpa: Allocator) void {
+        gpa.free(self.value);
+    }
+
     pub fn create(gpa: Allocator, T: type, value: []const u8) Allocator.Error!*T {
         if (!@hasDecl(T, "init"))
             @compileError("Expected type with init declaration, got " ++ @typeName(T));
@@ -189,6 +209,14 @@ pub const Parent = struct {
         };
     }
 
+    pub fn deinit(self: *const Parent, gpa: Allocator) void {
+        for (self.children.items) |child| {
+            child.deinit(gpa);
+        }
+        var children = self.children;
+        children.deinit(gpa);
+    }
+
     pub fn create(gpa: Allocator, T: type) Allocator.Error!*T {
         if (!@hasDecl(T, "init"))
             @compileError("Expected type with init declaration, got " ++ @typeName(T));
@@ -198,7 +226,11 @@ pub const Parent = struct {
         return n;
     }
 
-    pub fn append(self: *Parent, gpa: Allocator, node: *const Node) Allocator.Error!void {
+    pub fn append(
+        self: *Parent,
+        gpa: Allocator,
+        node: *const Node,
+    ) Allocator.Error!void {
         try self.children.append(gpa, node);
     }
 };
@@ -259,8 +291,8 @@ test "root can cast into a node and back" {
 
 test "it can parse a paragraph" {
     const gpa = std.testing.allocator;
-    var fba = FixedBufferAllocator.init(try gpa.alloc(u8, 1024));
-    defer gpa.free(fba.buffer);
+    const buf = try gpa.alloc(u8, 1024);
+    defer gpa.free(buf);
 
     const input =
         \\This is my new paragraph
@@ -270,7 +302,8 @@ test "it can parse a paragraph" {
 
     var reader = Io.Reader.fixed(input);
 
-    const ast = try Ast.build(&reader, &fba);
+    const ast = try Ast.build(&reader, gpa);
+    defer ast.deinit(gpa);
 
     try std.testing.expectEqual(ast.root.base.node, .root);
 

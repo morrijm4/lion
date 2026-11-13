@@ -14,22 +14,21 @@ pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
 
     if (args.len != 2) {
-        try help(stdout);
-        return try stdout.flush();
+        try stdout.writeAll("USAGE: lion <filename>\n");
+        try stdout.flush();
+        return;
     }
 
-    const input_file = try Io.Dir.cwd().openFile(init.io, args[1], .{});
+    const file_path = args[1];
+    const input_file = try Io.Dir.cwd().openFile(init.io, file_path, .{});
     var input_reader = input_file.reader(init.io, &input_buf);
     const reader = &input_reader.interface;
 
     var fba = std.heap.FixedBufferAllocator.init(&ast_buf);
-    const ast = try lion.Ast.build(reader, &fba);
+    const gpa = fba.allocator();
+    const ast = try lion.Ast.build(reader, gpa);
 
     const html_renderer = lion.Html.init(.{});
     try html_renderer.render(&ast, stdout);
     try stdout.flush();
-}
-
-fn help(w: *Io.Writer) Io.Writer.Error!void {
-    try w.writeAll("USAGE: lion <filename>\n");
 }

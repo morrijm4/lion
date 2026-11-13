@@ -53,7 +53,7 @@ fn renderParent(self: *const Html, node: *const Ast.Parent, w: *Io.Writer) Error
 }
 
 test "it renders a paragraph" {
-    var fba_buf: [1024]u8 = undefined;
+    const gpa = std.testing.allocator;
     var out_buf: [1024]u8 = undefined;
 
     const md =
@@ -63,11 +63,12 @@ test "it renders a paragraph" {
     const html = "<article><p>This is my new paragraph I have written in markdown</p></article>";
 
     const html_renderer = init(.{});
-    var fba = FixedBufferAllocator.init(&fba_buf);
     var out_writer = Io.Writer.fixed(&out_buf);
     var reader = Io.Reader.fixed(md);
 
-    const ast = try Ast.build(&reader, &fba);
+    const ast = try Ast.build(&reader, gpa);
+    defer ast.deinit(gpa);
+
     try html_renderer.render(&ast, &out_writer);
 
     try std.testing.expectEqualStrings(html, out_writer.buffer[0..html.len]);
