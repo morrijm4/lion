@@ -10,15 +10,15 @@ root: *Root,
 pub const BuildError = Io.Reader.LimitedAllocError;
 
 pub fn build(r: *Io.Reader, gpa: Allocator) BuildError!Ast {
-    const root: *Node = try Node.create(gpa, Root, .{});
+    const root = try Node.create(gpa, Root, .{});
 
-    const paragraph: *Node = try Node.create(gpa, Paragraph, .{});
+    const paragraph = try Node.create(gpa, Paragraph, .{});
     try root.append(gpa, paragraph);
 
     const value = try r.allocRemaining(gpa, .limited64(1024));
     std.mem.replaceScalar(u8, value, '\n', ' ');
 
-    const text: *Node = try Node.create(gpa, Text, .{});
+    const text = try Node.create(gpa, Text, .{});
     text.set(value);
     try paragraph.append(gpa, text);
 
@@ -26,8 +26,7 @@ pub fn build(r: *Io.Reader, gpa: Allocator) BuildError!Ast {
 }
 
 pub fn deinit(self: *Ast, gpa: Allocator) void {
-    const node = Node.from(self.root);
-    node.destroy(gpa);
+    Node.from(self.root).destroy(gpa);
 }
 
 pub const Kind = enum {
