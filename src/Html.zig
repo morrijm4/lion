@@ -24,23 +24,23 @@ pub fn init(opts: Options) Html {
 const Error = Allocator.Error || Io.Writer.Error;
 
 pub fn render(self: Html, ast: *const Ast, w: *Io.Writer) Error!void {
-    try self.renderNode(&ast.root.base.node, w);
+    try self.renderNode(&ast.root.base.base, w);
 }
 
-fn renderNode(self: *const Html, node: *const Ast.Node, w: *Io.Writer) Error!void {
-    switch (node.*) {
+fn renderNode(self: *const Html, node: *Ast.Node, w: *Io.Writer) Error!void {
+    switch (node.kind) {
         .root => {
             try w.writeAll(self.opts.root_begin);
-            try self.renderParent(node.asParent(), w);
+            try self.renderParent(node.to(Ast.Parent), w);
             try w.writeAll(self.opts.root_end);
         },
         .paragraph => {
             try w.writeAll(self.opts.paragraph_begin);
-            try self.renderParent(node.asParent(), w);
+            try self.renderParent(node.to(Ast.Parent), w);
             try w.writeAll(self.opts.paragraph_end);
         },
         .text => {
-            try w.writeAll(node.asLiteral().value);
+            try w.writeAll(node.to(Ast.Literal).value);
         },
         else => @panic("Not implemented"),
     }
@@ -66,7 +66,7 @@ test "it renders a paragraph" {
     var out_writer = Io.Writer.fixed(&out_buf);
     var reader = Io.Reader.fixed(md);
 
-    const ast = try Ast.build(&reader, gpa);
+    var ast = try Ast.build(&reader, gpa);
     defer ast.deinit(gpa);
 
     try html_renderer.render(&ast, &out_writer);

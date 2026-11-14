@@ -23,7 +23,7 @@ pub fn main(init: std.process.Init) !void {
     var input_reader = input_file.reader(init.io, &input_buf);
     const reader = &input_reader.interface;
 
-    const ast = try lion.Ast.build(reader, init.gpa);
+    var ast = try lion.Ast.build(reader, init.gpa);
     defer ast.deinit(init.gpa);
 
     const html_renderer = lion.Html.init(.{});

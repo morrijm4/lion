@@ -1,36 +1,36 @@
 const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
-const assert = std.debug.assert;
+const invariant = std.debug.assert;
 
 pub const Ast = @This();
 
-root: Root,
+root: *Root,
 
 pub const BuildError = Io.Reader.LimitedAllocError;
 
 pub fn build(r: *Io.Reader, gpa: Allocator) BuildError!Ast {
-    var ast: Ast = .{
-        .root = .init(),
-    };
+    const root: *Node = try Node.create(gpa, Root, .{});
 
-    const paragraph = try Parent.create(gpa, Paragraph);
-    try ast.root.base.append(gpa, .from(paragraph));
+    const paragraph: *Node = try Node.create(gpa, Paragraph, .{});
+    try root.append(gpa, paragraph);
 
     const value = try r.allocRemaining(gpa, .limited64(1024));
     std.mem.replaceScalar(u8, value, '\n', ' ');
 
-    const text = try Literal.create(gpa, Text, value);
-    try paragraph.base.append(gpa, .from(text));
+    const text: *Node = try Node.create(gpa, Text, .{});
+    text.set(value);
+    try paragraph.append(gpa, text);
 
-    return ast;
+    return .{ .root = root.to(Root) };
 }
 
-pub fn deinit(self: *const Ast, gpa: Allocator) void {
-    self.root.base.deinit(gpa);
+pub fn deinit(self: *Ast, gpa: Allocator) void {
+    const node = Node.from(self.root);
+    node.destroy(gpa);
 }
 
-pub const Type = enum {
+pub const Kind = enum {
     blockquote,
     @"break",
     code,
@@ -45,248 +45,243 @@ pub const Type = enum {
     root,
     //  strong,
     text,
+
+    const Group = enum {
+        literal,
+        parent,
+    };
+
+    pub fn from(T: type) Kind {
+        return switch (T) {
+            Root => .root,
+            Paragraph => .paragraph,
+            Text => .text,
+            else => @compileError("Not implemented"),
+        };
+    }
+
+    pub fn Type(self: Kind) type {
+        return switch (self) {
+            .root => Root,
+            .paragraph => Paragraph,
+            .text => Text,
+            else => @compileError("Not implemented"),
+        };
+    }
+
+    pub fn is(self: Kind, grp: Group) bool {
+        return self.group() == grp;
+    }
+
+    pub fn group(self: Kind) ?Group {
+        return switch (self) {
+            .blockquote,
+            .emphasis,
+            .heading,
+            .paragraph,
+            .root,
+            => .parent,
+            .code,
+            .text,
+            => .literal,
+            .@"break",
+            => null,
+        };
+    }
 };
 
-pub const Node = union(Type) {
-    blockquote,
-    @"break",
-    code: struct { lang: ?[]const u8, meta: ?[]const u8 },
-    emphasis,
-    heading: struct { depth: u3 },
-    paragraph,
-    root,
-    text,
+pub const Node = struct {
+    kind: Kind,
 
-    pub fn from(ptr: anytype) *const Node {
-        const T = @TypeOf(ptr);
+    pub fn init(comptime T: type, values: anytype) T {
+        Node.assert(T, Node);
+
+        const V = @TypeOf(values);
+        if (@typeInfo(V) != .@"struct") {
+            @compileError("Expected values to be struct, got " ++ @typeName(V));
+        }
+
+        inline for (@typeInfo(V).@"struct".fields) |field| {
+            if (!@hasField(T, field.name)) {
+                @compileError("Invalid field in values: " ++ field.name);
+            }
+        }
+
+        var node: T = undefined;
+        const base: Node = .{
+            .kind = Kind.from(T),
+        };
+
+        const Base = @FieldType(T, "base");
+        @field(node, "base") = if (Base == Node) base else .init(base);
+
+        inline for (@typeInfo(T).@"struct".fields) |field| {
+            if (@hasField(V, field.name)) {
+                @field(node, field.name) = @field(values, field.name);
+            } else if (comptime field.defaultValue()) |default| {
+                @field(node, field.name) = default;
+            } else if (comptime !std.mem.eql(u8, "base", field.name)) {
+                @compileError("Missing field: " ++ field.name);
+            }
+        }
+
+        return node;
+    }
+
+    pub fn destroy(self: *Node, gpa: Allocator) void {
+        switch (self.kind) {
+            inline .root, .paragraph, .text => |k| {
+                const T = k.Type();
+                const node = self.to(T);
+
+                if (@FieldType(T, "base") != Node) {
+                    node.base.destroy(gpa);
+                }
+
+                gpa.destroy(node);
+            },
+            else => unreachable, // not implemented all kinds in Type()
+        }
+    }
+
+    pub fn create(gpa: Allocator, T: type, values: anytype) Allocator.Error!*Node {
+        const node = try gpa.create(T);
+        node.* = Node.init(T, values);
+        return Node.from(node);
+    }
+
+    pub fn set(self: *Node, value: []const u8) void {
+        invariant(self.kind.is(.literal));
+        const lit = self.to(Literal);
+        lit.value = value;
+    }
+
+    pub fn append(self: *Node, gpa: Allocator, node: *Node) Allocator.Error!void {
+        invariant(self.kind.is(.parent));
+        const par = self.to(Parent);
+        try par.children.append(gpa, node);
+    }
+
+    pub fn to(self: *Node, T: type) *T {
+        Node.assert(T, Node);
+
+        if (T == Node) {
+            return self;
+        }
+
+        const Base = @FieldType(T, "base");
+        return @alignCast(@fieldParentPtr("base", self.to(Base)));
+    }
+
+    pub fn from(node: anytype) *Node {
+        const T = @TypeOf(node);
         const info = @typeInfo(T);
-        if (info != .pointer or info.pointer.size != .one)
-            @compileError("from() needs a pointer, got " ++ @typeName(T));
+        if (info != .pointer or info.pointer.size != .one) {
+            @compileError("Node single-item pointer, got " ++ @typeName(T));
+        }
 
         const Child = info.pointer.child;
         if (Child == Node) {
-            return ptr;
-        } else if (@hasField(Child, "node")) {
-            return from(&ptr.node);
+            return node;
         } else if (@hasField(Child, "base")) {
-            return from(&ptr.base);
+            return from(&node.base);
         } else {
-            @compileError("Expected Node type, got " ++ @typeName(T));
+            @compileError("No base in " ++ @typeName(T));
         }
     }
 
-    pub fn deinit(self: *const Node, gpa: Allocator) void {
-        if (self.isLiteral()) {
-            self.asLiteral().deinit(gpa);
-        } else if (self.isParent()) {
-            self.asParent().deinit(gpa);
+    fn is(Unknown: type, T: type) bool {
+        if (@typeInfo(Unknown) != .@"struct") {
+            return false;
         }
 
-        switch (self.*) {
-            .text => gpa.destroy(self.asText()),
-            .paragraph => gpa.destroy(self.asParagraph()),
-            .root => gpa.destroy(self.asRoot()),
-            else => @panic("Not implemented"),
+        if (Unknown == T) {
+            return true;
         }
+
+        if (@hasField(Unknown, "base")) {
+            return is(@FieldType(Unknown, "base"), T);
+        }
+
+        return false;
     }
 
-    pub fn isLiteral(self: Node) bool {
-        return switch (self) {
-            // Literals
-            .code,
-            .text,
-            => true,
-
-            // Parents
-            .blockquote,
-            .emphasis,
-            .heading,
-            .paragraph,
-            .root,
-            => false,
-
-            // Nodes
-            .@"break",
-            => false,
-        };
-    }
-
-    pub fn isParent(self: Node) bool {
-        return switch (self) {
-            // Literals
-            .code,
-            .text,
-            => false,
-
-            // Parents
-            .blockquote,
-            .emphasis,
-            .heading,
-            .paragraph,
-            .root,
-            => true,
-
-            // Nodes
-            .@"break",
-            => false,
-        };
-    }
-
-    pub fn asLiteral(self: *const Node) *const Literal {
-        assert(self.isLiteral());
-        return @fieldParentPtr("node", self);
-    }
-
-    pub fn asParent(self: *const Node) *const Parent {
-        assert(self.isParent());
-        return @fieldParentPtr("node", self);
-    }
-
-    pub fn asParagraph(self: *const Node) *const Paragraph {
-        assert(self.* == .paragraph);
-        const base = self.asParent();
-        return @fieldParentPtr("base", base);
-    }
-
-    pub fn asRoot(self: *const Node) *const Root {
-        assert(self.* == .root);
-        const base = self.asParent();
-        return @fieldParentPtr("base", base);
-    }
-
-    pub fn asText(self: *const Node) *const Text {
-        assert(self.* == .text);
-        const base = self.asLiteral();
-        return @fieldParentPtr("base", base);
+    fn assert(comptime Unknown: type, comptime T: type) void {
+        if (comptime !is(Unknown, T)) {
+            const t_name = @typeName(T);
+            const u_name = @typeName(Unknown);
+            @compileError("Expected " ++ t_name ++ ", got " ++ u_name);
+        }
     }
 };
 
 pub const Literal = struct {
-    node: Node,
+    base: Node,
     value: []const u8,
 
-    pub fn init(node: Node, value: []const u8) Literal {
-        return .{
-            .node = node,
-            .value = value,
-        };
+    pub fn init(base: Node) Literal {
+        return .{ .base = base, .value = &.{} };
     }
 
-    pub fn deinit(self: *const Literal, gpa: Allocator) void {
+    pub fn destroy(self: *Literal, gpa: Allocator) void {
         gpa.free(self.value);
-    }
-
-    pub fn create(gpa: Allocator, T: type, value: []const u8) Allocator.Error!*T {
-        if (!@hasDecl(T, "init"))
-            @compileError("Expected type with init declaration, got " ++ @typeName(T));
-
-        const Decl = @TypeOf(@field(T, "init"));
-        const info = @typeInfo(Decl);
-        if (info != .@"fn")
-            @compileError("Expected init to be a function, got " ++ @typeName(Decl));
-
-        const params = info.@"fn".params;
-        if (params.len != 1)
-            @compileError("Expected init to accept 1 parameter, got " ++ params.len);
-
-        if (params[0].type != []const u8)
-            @compileError("Expected init to accept []const u8, got " ++ @typeName(params[0].type));
-
-        const n = try gpa.create(T);
-        n.* = T.init(value);
-        return n;
     }
 };
 
 pub const Parent = struct {
-    node: Node,
-    children: std.ArrayList(*const Node),
+    base: Node,
+    children: std.ArrayList(*Node),
 
-    pub fn init(node: Node) Parent {
-        return .{
-            .node = node,
-            .children = .empty,
-        };
+    pub fn init(base: Node) Parent {
+        return .{ .base = base, .children = .empty };
     }
 
-    pub fn deinit(self: *const Parent, gpa: Allocator) void {
+    pub fn destroy(self: *Parent, gpa: Allocator) void {
         for (self.children.items) |child| {
-            child.deinit(gpa);
+            child.destroy(gpa);
         }
-        var children = self.children;
-        children.deinit(gpa);
-    }
-
-    pub fn create(gpa: Allocator, T: type) Allocator.Error!*T {
-        if (!@hasDecl(T, "init"))
-            @compileError("Expected type with init declaration, got " ++ @typeName(T));
-
-        const n = try gpa.create(T);
-        n.* = T.init();
-        return n;
-    }
-
-    pub fn append(
-        self: *Parent,
-        gpa: Allocator,
-        node: *const Node,
-    ) Allocator.Error!void {
-        try self.children.append(gpa, node);
-    }
-};
-
-pub const Paragraph = struct {
-    base: Parent,
-
-    pub fn init() Paragraph {
-        return .{
-            .base = .init(.{ .paragraph = {} }),
-        };
+        self.children.deinit(gpa);
     }
 };
 
 pub const Root = struct {
     base: Parent,
+};
 
-    pub fn init() Root {
-        return .{
-            .base = .init(.{ .root = {} }),
-        };
-    }
+pub const Paragraph = struct {
+    base: Parent,
 };
 
 pub const Text = struct {
     base: Literal,
-
-    pub fn init(value: []const u8) Text {
-        return .{
-            .base = .init(.{ .text = {} }, value),
-        };
-    }
 };
 
-test "paragraph can cast into a node and back" {
-    const paragraph = Paragraph.init();
-    const node = Node.from(&paragraph);
-    try std.testing.expectEqual(.paragraph, node.*);
-    const p = node.asParagraph();
-    try std.testing.expectEqual(.paragraph, p.base.node);
+pub const Break = struct {
+    base: Node,
+};
+
+test "is Node" {
+    try std.testing.expect(Node.is(Node, Node));
+    try std.testing.expect(Node.is(Literal, Node));
+    try std.testing.expect(Node.is(Parent, Node));
+    try std.testing.expect(Node.is(Root, Node));
+    try std.testing.expect(!Node.is(Kind, Node));
 }
 
-test "text can cast into a node and back" {
-    const text = Text.init("hi, mom!");
-    const node = Node.from(&text);
-    try std.testing.expectEqual(.text, node.*);
-    const t = node.asText();
-    try std.testing.expectEqualStrings("hi, mom!", t.base.value);
+test "is Literal" {
+    try std.testing.expect(Node.is(Literal, Literal));
+    try std.testing.expect(!Node.is(Root, Literal));
+    try std.testing.expect(!Node.is(Node, Literal));
+    try std.testing.expect(!Node.is(Parent, Literal));
+    try std.testing.expect(!Node.is(Kind, Literal));
 }
 
-test "root can cast into a node and back" {
-    const root = Root.init();
-    const node = Node.from(&root);
-    try std.testing.expectEqual(.root, node.*);
-    const r = node.asRoot();
-    try std.testing.expectEqual(.root, r.base.node);
+test "is Parent" {
+    try std.testing.expect(Node.is(Root, Parent));
+    try std.testing.expect(Node.is(Parent, Parent));
+    try std.testing.expect(!Node.is(Literal, Parent));
+    try std.testing.expect(!Node.is(Node, Parent));
+    try std.testing.expect(!Node.is(Kind, Parent));
 }
 
 test "it can parse a paragraph" {
@@ -302,12 +297,12 @@ test "it can parse a paragraph" {
 
     var reader = Io.Reader.fixed(input);
 
-    const ast = try Ast.build(&reader, gpa);
+    var ast = try Ast.build(&reader, gpa);
     defer ast.deinit(gpa);
 
-    try std.testing.expectEqual(ast.root.base.node, .root);
+    try std.testing.expectEqual(ast.root.base.base.kind, .root);
 
-    const paragraph = ast.root.base.children.items[0].asParagraph();
-    const text = paragraph.base.children.items[0].asText();
+    const paragraph = ast.root.base.children.items[0].to(Paragraph);
+    const text = paragraph.base.children.items[0].to(Text);
     try std.testing.expectEqualStrings(expected, text.base.value);
 }
