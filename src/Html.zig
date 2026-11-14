@@ -23,7 +23,7 @@ pub fn init(opts: Options) Html {
 
 const Error = Allocator.Error || Io.Writer.Error;
 
-pub fn render(self: *const Html, ast: *const Ast, w: *Io.Writer) Error!void {
+pub fn render(self: Html, ast: *const Ast, w: *Io.Writer) Error!void {
     try self.renderNode(&ast.root.base.node, w);
 }
 

@@ -5,7 +5,6 @@ const lion = @import("lion");
 pub fn main(init: std.process.Init) !void {
     var stdout_buf: [1024]u8 = undefined;
     var input_buf: [1024]u8 = undefined;
-    var ast_buf: [1024]u8 = undefined;
 
     const stdout_file = Io.File.stdout();
     var stdout_writer = stdout_file.writer(init.io, &stdout_buf);
@@ -24,9 +23,8 @@ pub fn main(init: std.process.Init) !void {
     var input_reader = input_file.reader(init.io, &input_buf);
     const reader = &input_reader.interface;
 
-    var fba = std.heap.FixedBufferAllocator.init(&ast_buf);
-    const gpa = fba.allocator();
-    const ast = try lion.Ast.build(reader, gpa);
+    const ast = try lion.Ast.build(reader, init.gpa);
+    defer ast.deinit(init.gpa);
 
     const html_renderer = lion.Html.init(.{});
     try html_renderer.render(&ast, stdout);
