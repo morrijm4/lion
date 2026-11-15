@@ -48,6 +48,7 @@ pub const Kind = enum {
     const Group = enum {
         literal,
         parent,
+        node,
     };
 
     pub fn from(comptime T: type) Kind {
@@ -81,7 +82,7 @@ pub const Kind = enum {
         return self.group() == grp;
     }
 
-    pub fn group(self: Kind) ?Group {
+    pub fn group(self: Kind) Group {
         return switch (self) {
             .blockquote,
             .emphasis,
@@ -93,7 +94,7 @@ pub const Kind = enum {
             .text,
             => .literal,
             .@"break",
-            => null,
+            => .node,
         };
     }
 };
@@ -329,6 +330,49 @@ test "is Parent" {
     try std.testing.expect(!Node.is(Literal, Parent));
     try std.testing.expect(!Node.is(Node, Parent));
     try std.testing.expect(!Node.is(Kind, Parent));
+}
+
+test "Kind from" {
+    try std.testing.expectEqual(Kind.from(Blockquote), .blockquote);
+}
+
+test "Kind Type()" {
+    try std.testing.expectEqual(Kind.Type(.blockquote), Blockquote);
+}
+
+test "Kind is" {
+    const blockquote: Kind = .blockquote;
+    const code: Kind = .code;
+    const @"break": Kind = .@"break";
+
+    try std.testing.expect(blockquote.is(.parent));
+    try std.testing.expect(code.is(.literal));
+    try std.testing.expect(@"break".is(.node));
+}
+
+test "Kind group" {
+    const blockquote: Kind = .blockquote;
+    const code: Kind = .code;
+    const @"break": Kind = .@"break";
+
+    try std.testing.expectEqual(blockquote.group(), .parent);
+    try std.testing.expectEqual(code.group(), .literal);
+    try std.testing.expectEqual(@"break".group(), .node);
+}
+
+test "Node init" {
+    // TODO: allow for const nodes
+    var c1 = Node.init(Code, .{});
+    var c2 = Node.init(Code, .{ .lang = "zig" });
+
+    const n1 = Node.from(&c1);
+    const n2 = Node.from(&c2);
+
+    try std.testing.expectEqual(n1.kind, .code);
+    try std.testing.expectEqual(n2.kind, .code);
+
+    try std.testing.expectEqual(c1.lang, null);
+    try std.testing.expectEqualStrings(c2.lang.?, "zig");
 }
 
 test "it can parse a paragraph" {
