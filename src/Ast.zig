@@ -50,21 +50,30 @@ pub const Kind = enum {
         parent,
     };
 
-    pub fn from(T: type) Kind {
+    pub fn from(comptime T: type) Kind {
         return switch (T) {
-            Root => .root,
+            Blockquote => .blockquote,
+            Break => .@"break",
+            Code => .code,
+            Emphasis => .emphasis,
+            Heading => .heading,
             Paragraph => .paragraph,
+            Root => .root,
             Text => .text,
-            else => @compileError("Not implemented"),
+            else => @compileError("Invalid kind, got " ++ @typeName(T)),
         };
     }
 
     pub fn Type(self: Kind) type {
         return switch (self) {
-            .root => Root,
+            .blockquote => Blockquote,
+            .@"break" => Break,
+            .code => Code,
+            .emphasis => Emphasis,
+            .heading => Heading,
             .paragraph => Paragraph,
+            .root => Root,
             .text => Text,
-            else => @compileError("Not implemented"),
         };
     }
 
@@ -129,7 +138,7 @@ pub const Node = struct {
 
     pub fn destroy(self: *Node, gpa: Allocator) void {
         switch (self.kind) {
-            inline .root, .paragraph, .text => |k| {
+            inline else => |k| {
                 const T = k.Type();
                 const node = self.to(T);
 
@@ -139,7 +148,6 @@ pub const Node = struct {
 
                 gpa.destroy(node);
             },
-            else => unreachable, // not implemented all kinds in Type()
         }
     }
 
@@ -151,14 +159,14 @@ pub const Node = struct {
 
     pub fn set(self: *Node, value: []const u8) void {
         invariant(self.kind.is(.literal));
-        const lit = self.to(Literal);
-        lit.value = value;
+        const literal = self.to(Literal);
+        literal.value = value;
     }
 
     pub fn append(self: *Node, gpa: Allocator, node: *Node) Allocator.Error!void {
         invariant(self.kind.is(.parent));
-        const par = self.to(Parent);
-        try par.children.append(gpa, node);
+        const parent = self.to(Parent);
+        try parent.children.append(gpa, node);
     }
 
     pub fn to(self: *Node, T: type) *T {
@@ -243,7 +251,43 @@ pub const Parent = struct {
     }
 };
 
-pub const Root = struct {
+pub const Blockquote = struct {
+    base: Parent,
+};
+
+pub const Break = struct {
+    base: Node,
+};
+
+pub const Code = struct {
+    base: Literal,
+    lang: ?[]const u8 = null,
+    meta: ?[]const u8 = null,
+};
+
+pub const Emphasis = struct {
+    base: Parent,
+};
+
+pub const Heading = struct {
+    base: Parent,
+};
+
+pub const Html = struct {
+    base: Literal,
+};
+
+pub const InlineCode = struct {
+    base: Literal,
+};
+
+pub const List = struct {
+    base: Parent,
+    ordered: bool = false,
+    start: ?u32 = null,
+};
+
+pub const ListItem = struct {
     base: Parent,
 };
 
@@ -251,12 +295,16 @@ pub const Paragraph = struct {
     base: Parent,
 };
 
-pub const Text = struct {
-    base: Literal,
+pub const Root = struct {
+    base: Parent,
 };
 
-pub const Break = struct {
-    base: Node,
+pub const Strong = struct {
+    base: Parent,
+};
+
+pub const Text = struct {
+    base: Literal,
 };
 
 test "is Node" {
