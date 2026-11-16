@@ -24,32 +24,32 @@ pub fn init(opts: Options) Html {
 const Error = Allocator.Error || Io.Writer.Error;
 
 pub fn render(self: Html, ast: *const Ast, w: *Io.Writer) Error!void {
-    try self.renderNode(&ast.root.base.base, w);
+    try self.renderNode(ast.root, w);
 }
 
 fn renderNode(self: *const Html, node: *Ast.Node, w: *Io.Writer) Error!void {
-    switch (node.kind) {
+    switch (node.*) {
         .root => {
             try w.writeAll(self.opts.root_begin);
-            try self.renderParent(node.to(Ast.Parent), w);
+            try self.renderParent(node, w);
             try w.writeAll(self.opts.root_end);
         },
         .paragraph => {
             try w.writeAll(self.opts.paragraph_begin);
-            try self.renderParent(node.to(Ast.Parent), w);
+            try self.renderParent(node, w);
             try w.writeAll(self.opts.paragraph_end);
         },
         .text => {
-            try w.writeAll(node.to(Ast.Literal).value);
+            try w.writeAll(node.text.value);
         },
         else => @panic("Not implemented"),
     }
 }
 
-fn renderParent(self: *const Html, node: *const Ast.Parent, w: *Io.Writer) Error!void {
-    for (node.children.items) |child| {
-        try self.renderNode(child, w);
-    }
+fn renderParent(self: *const Html, node: *Ast.Node, w: *Io.Writer) Error!void {
+    if (node.children()) |children| {
+        for (children.items) |child| try self.renderNode(child, w);
+    } else unreachable;
 }
 
 test "it renders a paragraph" {
@@ -67,7 +67,7 @@ test "it renders a paragraph" {
     var reader = Io.Reader.fixed(md);
 
     var ast = try Ast.build(&reader, gpa);
-    defer ast.deinit(gpa);
+    defer ast.deinit();
 
     try html_renderer.render(&ast, &out_writer);
 

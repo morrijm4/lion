@@ -1,385 +1,135 @@
 const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
-const invariant = std.debug.assert;
 
 pub const Ast = @This();
 
-root: *Root,
+arena: std.heap.ArenaAllocator,
+root: *Node,
 
 pub const BuildError = Io.Reader.LimitedAllocError;
 
 pub fn build(r: *Io.Reader, gpa: Allocator) BuildError!Ast {
-    const root = try Node.create(gpa, Root, .{});
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    errdefer arena.deinit();
+    const a = arena.allocator();
 
-    const paragraph = try Node.create(gpa, Paragraph, .{});
-    try root.append(gpa, paragraph);
+    const root: *Node = try .create(a, Root{});
 
-    const value = try r.allocRemaining(gpa, .limited64(1024));
+    const paragraph: *Node = try .create(a, Paragraph{});
+    try root.children().?.append(a, paragraph);
+
+    const value = try r.allocRemaining(a, .limited64(1024 * 1024));
     std.mem.replaceScalar(u8, value, '\n', ' ');
 
-    const text = try Node.create(gpa, Text, .{});
-    text.set(value);
-    try paragraph.append(gpa, text);
+    const text: *Node = try .create(a, Text{ .value = value });
+    try paragraph.children().?.append(a, text);
 
-    return .{ .root = root.to(Root) };
+    return .{ .arena = arena, .root = root };
 }
 
-pub fn deinit(self: *Ast, gpa: Allocator) void {
-    Node.from(self.root).destroy(gpa);
+pub fn deinit(self: *Ast) void {
+    self.arena.deinit();
 }
 
-pub const Kind = enum {
-    blockquote,
-    @"break",
-    code,
-    emphasis,
-    heading,
+pub const Node = union(enum) {
+    blockquote: Blockquote,
+    @"break": Break,
+    code: Code,
+    emphasis: Emphasis,
+    heading: Heading,
+    html: Html,
     //  image,
-    //  inline_code,
+    inline_code: InlineCode,
     //  link,
-    //  list,
-    //  list_item,
-    paragraph,
-    root,
-    //  strong,
-    text,
+    list: List,
+    list_item: ListItem,
+    paragraph: Paragraph,
+    root: Root,
+    strong: Strong,
+    text: Text,
 
-    const Group = enum {
-        literal,
-        parent,
-        node,
-    };
-
-    pub fn from(comptime T: type) Kind {
-        return switch (T) {
-            Blockquote => .blockquote,
-            Break => .@"break",
-            Code => .code,
-            Emphasis => .emphasis,
-            Heading => .heading,
-            Paragraph => .paragraph,
-            Root => .root,
-            Text => .text,
-            else => @compileError("Invalid kind, got " ++ @typeName(T)),
-        };
-    }
-
-    pub fn Type(self: Kind) type {
-        return switch (self) {
-            .blockquote => Blockquote,
-            .@"break" => Break,
-            .code => Code,
-            .emphasis => Emphasis,
-            .heading => Heading,
-            .paragraph => Paragraph,
-            .root => Root,
-            .text => Text,
-        };
-    }
-
-    pub fn is(self: Kind, grp: Group) bool {
-        return self.group() == grp;
-    }
-
-    pub fn group(self: Kind) Group {
-        return switch (self) {
-            .blockquote,
-            .emphasis,
-            .heading,
-            .paragraph,
-            .root,
-            => .parent,
-            .code,
-            .text,
-            => .literal,
-            .@"break",
-            => .node,
-        };
-    }
-};
-
-pub const Node = struct {
-    kind: Kind,
-
-    pub fn init(comptime T: type, values: anytype) T {
-        Node.assert(T, Node);
-
-        const V = @TypeOf(values);
-        if (@typeInfo(V) != .@"struct") {
-            @compileError("Expected values to be struct, got " ++ @typeName(V));
-        }
-
-        inline for (@typeInfo(V).@"struct".fields) |field| {
-            if (!@hasField(T, field.name)) {
-                @compileError("Invalid field in values: " ++ field.name);
+    pub fn create(arena: Allocator, data: anytype) Allocator.Error!*Node {
+        inline for (@typeInfo(Node).@"union".fields) |f| {
+            if (f.type == @TypeOf(data)) {
+                const node = try arena.create(Node);
+                node.* = @unionInit(Node, f.name, data);
+                return node;
             }
         }
-
-        var node: T = undefined;
-        const base: Node = .{
-            .kind = Kind.from(T),
-        };
-
-        const Base = @FieldType(T, "base");
-        @field(node, "base") = if (Base == Node) base else .init(base);
-
-        inline for (@typeInfo(T).@"struct".fields) |field| {
-            if (@hasField(V, field.name)) {
-                @field(node, field.name) = @field(values, field.name);
-            } else if (comptime field.defaultValue()) |default| {
-                @field(node, field.name) = default;
-            } else if (comptime !std.mem.eql(u8, "base", field.name)) {
-                @compileError("Missing field: " ++ field.name);
-            }
-        }
-
-        return node;
+        @compileError("Expected node type, got " ++ @typeName(@TypeOf(data)));
     }
 
-    pub fn destroy(self: *Node, gpa: Allocator) void {
-        switch (self.kind) {
-            inline else => |k| {
-                const T = k.Type();
-                const node = self.to(T);
-
-                if (@FieldType(T, "base") != Node) {
-                    node.base.destroy(gpa);
+    pub fn children(self: *Node) ?*std.ArrayList(*Node) {
+        switch (self.*) {
+            inline else => |*node| {
+                if (@hasField(@TypeOf(node.*), "children")) {
+                    return &node.children;
+                } else {
+                    return null;
                 }
-
-                gpa.destroy(node);
             },
         }
-    }
-
-    pub fn create(gpa: Allocator, T: type, values: anytype) Allocator.Error!*Node {
-        const node = try gpa.create(T);
-        node.* = Node.init(T, values);
-        return Node.from(node);
-    }
-
-    pub fn set(self: *Node, value: []const u8) void {
-        invariant(self.kind.is(.literal));
-        const literal = self.to(Literal);
-        literal.value = value;
-    }
-
-    pub fn append(self: *Node, gpa: Allocator, node: *Node) Allocator.Error!void {
-        invariant(self.kind.is(.parent));
-        const parent = self.to(Parent);
-        try parent.children.append(gpa, node);
-    }
-
-    pub fn to(self: *Node, T: type) *T {
-        Node.assert(T, Node);
-
-        if (T == Node) {
-            return self;
-        }
-
-        const Base = @FieldType(T, "base");
-        return @alignCast(@fieldParentPtr("base", self.to(Base)));
-    }
-
-    pub fn from(node: anytype) *Node {
-        const T = @TypeOf(node);
-        const info = @typeInfo(T);
-        if (info != .pointer or info.pointer.size != .one) {
-            @compileError("Node single-item pointer, got " ++ @typeName(T));
-        }
-
-        const Child = info.pointer.child;
-        if (Child == Node) {
-            return node;
-        } else if (@hasField(Child, "base")) {
-            return from(&node.base);
-        } else {
-            @compileError("No base in " ++ @typeName(T));
-        }
-    }
-
-    fn is(Unknown: type, T: type) bool {
-        if (@typeInfo(Unknown) != .@"struct") {
-            return false;
-        }
-
-        if (Unknown == T) {
-            return true;
-        }
-
-        if (@hasField(Unknown, "base")) {
-            return is(@FieldType(Unknown, "base"), T);
-        }
-
-        return false;
-    }
-
-    fn assert(comptime Unknown: type, comptime T: type) void {
-        if (comptime !is(Unknown, T)) {
-            const t_name = @typeName(T);
-            const u_name = @typeName(Unknown);
-            @compileError("Expected " ++ t_name ++ ", got " ++ u_name);
-        }
-    }
-};
-
-pub const Literal = struct {
-    base: Node,
-    value: []const u8,
-
-    pub fn init(base: Node) Literal {
-        return .{ .base = base, .value = &.{} };
-    }
-
-    pub fn destroy(self: *Literal, gpa: Allocator) void {
-        gpa.free(self.value);
-    }
-};
-
-pub const Parent = struct {
-    base: Node,
-    children: std.ArrayList(*Node),
-
-    pub fn init(base: Node) Parent {
-        return .{ .base = base, .children = .empty };
-    }
-
-    pub fn destroy(self: *Parent, gpa: Allocator) void {
-        for (self.children.items) |child| {
-            child.destroy(gpa);
-        }
-        self.children.deinit(gpa);
     }
 };
 
 pub const Blockquote = struct {
-    base: Parent,
+    children: std.ArrayList(*Node) = .empty,
 };
 
-pub const Break = struct {
-    base: Node,
-};
+pub const Break = struct {};
 
 pub const Code = struct {
-    base: Literal,
+    value: []const u8,
     lang: ?[]const u8 = null,
     meta: ?[]const u8 = null,
 };
 
 pub const Emphasis = struct {
-    base: Parent,
+    children: std.ArrayList(*Node) = .empty,
 };
 
 pub const Heading = struct {
-    base: Parent,
+    children: std.ArrayList(*Node) = .empty,
+    depth: u3,
 };
 
 pub const Html = struct {
-    base: Literal,
+    value: []const u8,
 };
 
 pub const InlineCode = struct {
-    base: Literal,
+    value: []const u8,
 };
 
 pub const List = struct {
-    base: Parent,
+    children: std.ArrayList(*Node) = .empty,
     ordered: bool = false,
     start: ?u32 = null,
 };
 
 pub const ListItem = struct {
-    base: Parent,
+    children: std.ArrayList(*Node) = .empty,
 };
 
 pub const Paragraph = struct {
-    base: Parent,
+    children: std.ArrayList(*Node) = .empty,
 };
 
 pub const Root = struct {
-    base: Parent,
+    children: std.ArrayList(*Node) = .empty,
 };
 
 pub const Strong = struct {
-    base: Parent,
+    children: std.ArrayList(*Node) = .empty,
 };
 
 pub const Text = struct {
-    base: Literal,
+    value: []const u8,
 };
-
-test "is Node" {
-    try std.testing.expect(Node.is(Node, Node));
-    try std.testing.expect(Node.is(Literal, Node));
-    try std.testing.expect(Node.is(Parent, Node));
-    try std.testing.expect(Node.is(Root, Node));
-    try std.testing.expect(!Node.is(Kind, Node));
-}
-
-test "is Literal" {
-    try std.testing.expect(Node.is(Literal, Literal));
-    try std.testing.expect(!Node.is(Root, Literal));
-    try std.testing.expect(!Node.is(Node, Literal));
-    try std.testing.expect(!Node.is(Parent, Literal));
-    try std.testing.expect(!Node.is(Kind, Literal));
-}
-
-test "is Parent" {
-    try std.testing.expect(Node.is(Root, Parent));
-    try std.testing.expect(Node.is(Parent, Parent));
-    try std.testing.expect(!Node.is(Literal, Parent));
-    try std.testing.expect(!Node.is(Node, Parent));
-    try std.testing.expect(!Node.is(Kind, Parent));
-}
-
-test "Kind from" {
-    try std.testing.expectEqual(Kind.from(Blockquote), .blockquote);
-}
-
-test "Kind Type()" {
-    try std.testing.expectEqual(Kind.Type(.blockquote), Blockquote);
-}
-
-test "Kind is" {
-    const blockquote: Kind = .blockquote;
-    const code: Kind = .code;
-    const @"break": Kind = .@"break";
-
-    try std.testing.expect(blockquote.is(.parent));
-    try std.testing.expect(code.is(.literal));
-    try std.testing.expect(@"break".is(.node));
-}
-
-test "Kind group" {
-    const blockquote: Kind = .blockquote;
-    const code: Kind = .code;
-    const @"break": Kind = .@"break";
-
-    try std.testing.expectEqual(blockquote.group(), .parent);
-    try std.testing.expectEqual(code.group(), .literal);
-    try std.testing.expectEqual(@"break".group(), .node);
-}
-
-test "Node init" {
-    // TODO: allow for const nodes
-    var c1 = Node.init(Code, .{});
-    var c2 = Node.init(Code, .{ .lang = "zig" });
-
-    const n1 = Node.from(&c1);
-    const n2 = Node.from(&c2);
-
-    try std.testing.expectEqual(n1.kind, .code);
-    try std.testing.expectEqual(n2.kind, .code);
-
-    try std.testing.expectEqual(c1.lang, null);
-    try std.testing.expectEqualStrings(c2.lang.?, "zig");
-}
 
 test "it can parse a paragraph" {
     const gpa = std.testing.allocator;
-    const buf = try gpa.alloc(u8, 1024);
-    defer gpa.free(buf);
-
     const input =
         \\This is my new paragraph
         \\I have written in markdown
@@ -389,11 +139,12 @@ test "it can parse a paragraph" {
     var reader = Io.Reader.fixed(input);
 
     var ast = try Ast.build(&reader, gpa);
-    defer ast.deinit(gpa);
+    defer ast.deinit();
 
-    try std.testing.expectEqual(ast.root.base.base.kind, .root);
+    const paragraph = ast.root.children().?.items[0];
+    const text = paragraph.children().?.items[0];
 
-    const paragraph = ast.root.base.children.items[0].to(Paragraph);
-    const text = paragraph.base.children.items[0].to(Text);
-    try std.testing.expectEqualStrings(expected, text.base.value);
+    try std.testing.expect(paragraph.* == .paragraph);
+    try std.testing.expect(text.* == .text);
+    try std.testing.expectEqualStrings(expected, text.text.value);
 }
