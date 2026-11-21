@@ -2,37 +2,75 @@ const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 
+const Type = @import("Type.zig").Type;
+
 pub const Ast = @This();
 
 arena: std.heap.ArenaAllocator,
 root: *Node,
 
-pub const BuildError = Io.Reader.LimitedAllocError;
+const MAX_HEADING_DEPTH = 6;
 
-pub fn build(r: *Io.Reader, gpa: Allocator) BuildError!Ast {
+pub const BuildError = Allocator.Error || error{
+    ReadFailed,
+    StreamTooLong,
+    Invalid,
+    Unsupported,
+};
+
+pub fn deinit(self: Ast) void {
+    self.arena.deinit();
+}
+
+pub fn build(reader: *Io.Reader, gpa: Allocator) BuildError!Ast {
     var arena = std.heap.ArenaAllocator.init(gpa);
     errdefer arena.deinit();
     const a = arena.allocator();
 
     const root: *Node = try .create(a, Root{});
+    const children = root.children().?;
 
-    const paragraph: *Node = try .create(a, Paragraph{});
-    try root.children().?.append(a, paragraph);
+    while (try reader.takeDelimiter('\n')) |line| {
+        if (line.len == 0) {
+            try children.append(a, try .create(a, Paragraph{}));
+        } else if (line[0] == '#') {
+            try children.append(a, try buildHeading(a, line));
+        } else if (std.ascii.isAlphabetic(line[0])) {
+            const maybe_last = children.getLastOrNull();
+            if (maybe_last == null or maybe_last.?.* != .paragraph) {
+                try children.append(a, try .create(a, Paragraph{}));
+            }
 
-    const value = try r.allocRemaining(a, .limited64(1024 * 1024));
-    std.mem.replaceScalar(u8, value, '\n', ' ');
-
-    const text: *Node = try .create(a, Text{ .value = value });
-    try paragraph.children().?.append(a, text);
+            const last = children.getLast();
+            const text: *Node = try .create(a, Text{ .value = trim(line) });
+            try last.children().?.append(a, text);
+        } else {
+            return error.Unsupported;
+        }
+    }
 
     return .{ .arena = arena, .root = root };
 }
 
-pub fn deinit(self: *Ast) void {
-    self.arena.deinit();
+const BuildHeadingError = Allocator.Error || error{Invalid};
+
+pub fn buildHeading(arena: Allocator, line: []const u8) BuildHeadingError!*Node {
+    var depth: u3 = 1;
+    while (depth <= MAX_HEADING_DEPTH) : (depth += 1) {
+        if (line[depth - 1] != '#') break;
+    }
+
+    const heading: *Node = try .create(arena, Heading{ .depth = depth });
+    const title = try arena.dupe(u8, trim(line[depth..]));
+    try heading.children().?.append(arena, try .create(arena, Text{ .value = title }));
+    return heading;
 }
 
-pub const Node = union(enum) {
+fn trim(str: []const u8) []const u8 {
+    return std.mem.trim(u8, str, &std.ascii.whitespace);
+}
+
+pub const Node = union(Type) {
     blockquote: Blockquote,
     @"break": Break,
     code: Code,
@@ -134,7 +172,8 @@ test "it can parse a paragraph" {
         \\This is my new paragraph
         \\I have written in markdown
     ;
-    const expected = "This is my new paragraph I have written in markdown";
+    const e0 = "This is my new paragraph";
+    const e1 = "I have written in markdown";
 
     var reader = Io.Reader.fixed(input);
 
@@ -142,9 +181,12 @@ test "it can parse a paragraph" {
     defer ast.deinit();
 
     const paragraph = ast.root.children().?.items[0];
-    const text = paragraph.children().?.items[0];
+    const t0 = paragraph.children().?.items[0];
+    const t1 = paragraph.children().?.items[1];
 
     try std.testing.expect(paragraph.* == .paragraph);
-    try std.testing.expect(text.* == .text);
-    try std.testing.expectEqualStrings(expected, text.text.value);
+    try std.testing.expect(t0.* == .text);
+    try std.testing.expect(t1.* == .text);
+    try std.testing.expectEqualStrings(e0, t0.text.value);
+    try std.testing.expectEqualStrings(e1, t1.text.value);
 }

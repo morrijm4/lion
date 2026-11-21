@@ -1,0 +1,15 @@
+pub const Type = enum {
+    blockquote,
+    @"break",
+    code,
+    emphasis,
+    heading,
+    html,
+    inline_code,
+    list,
+    list_item,
+    paragraph,
+    root,
+    strong,
+    text,
+};
