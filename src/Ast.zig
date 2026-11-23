@@ -1,6 +1,7 @@
 const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
+const assert = std.debug.assert;
 
 const Type = @import("Type.zig").Type;
 
@@ -55,10 +56,13 @@ pub fn build(reader: *Io.Reader, gpa: Allocator) BuildError!Ast {
 const BuildHeadingError = Allocator.Error || error{Invalid};
 
 pub fn buildHeading(arena: Allocator, line: []const u8) BuildHeadingError!*Node {
-    var depth: u3 = 1;
-    while (depth <= MAX_HEADING_DEPTH) : (depth += 1) {
-        if (line[depth - 1] != '#') break;
+    var depth: u3 = 0;
+    while (depth <= MAX_HEADING_DEPTH and depth < line.len) : (depth += 1) {
+        if (line[depth] != '#') break;
     }
+
+    assert(depth >= 1);
+    assert(depth <= 6);
 
     const heading: *Node = try .create(arena, Heading{ .depth = depth });
     const title = try arena.dupe(u8, trim(line[depth..]));

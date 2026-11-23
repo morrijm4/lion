@@ -32,8 +32,8 @@ const Tags = struct {
         .end = "</em>",
     },
     heading: Tag = .{
-        .begin = "<h1>\n", // TODO: impl heading depths
-        .end = "</h1>\n",
+        .begin = "", // TODO: This shouldn't be hardcoded
+        .end = "",
     },
     html: Tag = .{
         .begin = "",
@@ -93,7 +93,21 @@ pub fn renderNode(
 ) Error!void {
     const t = self.tag(std.meta.activeTag(node.*));
     try self.renderIndent(writer, depth);
-    try writer.writeAll(t.begin);
+
+    switch (node.*) {
+        .heading => |h| {
+            switch (h.depth) {
+                1 => try writer.writeAll("<h1>\n"),
+                2 => try writer.writeAll("<h2>\n"),
+                3 => try writer.writeAll("<h3>\n"),
+                4 => try writer.writeAll("<h4>\n"),
+                5 => try writer.writeAll("<h5>\n"),
+                6 => try writer.writeAll("<h6>\n"),
+                else => @panic("Invalid depth"),
+            }
+        },
+        else => try writer.writeAll(t.begin),
+    }
 
     switch (node.*) {
         inline else => |*n| {
@@ -110,11 +124,24 @@ pub fn renderNode(
     }
 
     switch (node.*) {
-        .text => {},
-        else => try self.renderIndent(writer, depth),
+        .text => try writer.writeAll(t.end),
+        .heading => |h| {
+            try self.renderIndent(writer, depth);
+            switch (h.depth) {
+                1 => try writer.writeAll("</h1>\n"),
+                2 => try writer.writeAll("</h2>\n"),
+                3 => try writer.writeAll("</h3>\n"),
+                4 => try writer.writeAll("</h4>\n"),
+                5 => try writer.writeAll("</h5>\n"),
+                6 => try writer.writeAll("</h6>\n"),
+                else => @panic("Invalid depth"),
+            }
+        },
+        else => {
+            try self.renderIndent(writer, depth);
+            try writer.writeAll(t.end);
+        },
     }
-
-    try writer.writeAll(t.end);
 }
 
 pub fn renderIndent(self: *const Html, writer: *Io.Writer, depth: u8) Error!void {
