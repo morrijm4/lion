@@ -29,22 +29,44 @@ pub fn build(reader: *Io.Reader, gpa: Allocator) BuildError!Ast {
     const a = arena.allocator();
 
     const root: *Node = try .create(a, Root{});
-    const children = root.children().?;
+    var current: ?*Node = null;
 
     while (try reader.takeDelimiter('\n')) |line| {
-        if (line.len == 0) {
-            try children.append(a, try .create(a, Paragraph{}));
-        } else if (line[0] == '#') {
-            try children.append(a, try buildHeading(a, line));
-        } else if (std.ascii.isAlphabetic(line[0])) {
-            const maybe_last = children.getLastOrNull();
-            if (maybe_last == null or maybe_last.?.* != .paragraph) {
-                try children.append(a, try .create(a, Paragraph{}));
+        const trimmed = trim(line);
+
+        if (trimmed.len == 0) {
+            current = null;
+        } else if (trimmed[0] == '>') {
+            if (current == null or current.?.* != .blockquote) {
+                current = try .create(a, Blockquote{});
+                try root.children().?.append(a, current.?);
+            }
+            const item = if (trimmed.len > 1) trim(trimmed[1..]) else "";
+            const value = try a.dupe(u8, item);
+            const text: *Node = try .create(a, Text{ .value = value });
+            try current.?.children().?.append(a, text);
+        } else if (trimmed[0] == '-') {
+            if (current == null or current.?.* != .list) {
+                current = try .create(a, List{});
+                try root.children().?.append(a, current.?);
+            }
+            const item = if (trimmed.len > 1) trim(trimmed[1..]) else "";
+
+            var li: *Node = try .create(a, ListItem{});
+            try current.?.children().?.append(a, li);
+
+            const value = try a.dupe(u8, item);
+            try li.children().?.append(a, try .create(a, Text{ .value = value }));
+        } else if (trimmed[0] == '#') {
+            try root.children().?.append(a, try buildHeading(a, trimmed));
+        } else if (std.ascii.isAlphabetic(trimmed[0])) {
+            if (current == null or current.?.* != .paragraph) {
+                current = try .create(a, Paragraph{});
+                try root.children().?.append(a, current.?);
             }
 
-            const last = children.getLast();
-            const text: *Node = try .create(a, Text{ .value = trim(line) });
-            try last.children().?.append(a, text);
+            const text: *Node = try .create(a, Text{ .value = trim(trimmed) });
+            try current.?.children().?.append(a, text);
         } else {
             return error.Unsupported;
         }

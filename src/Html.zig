@@ -16,16 +16,16 @@ const Tag = struct {
 
 const Tags = struct {
     blockquote: Tag = .{
-        .begin = "<blockquote>",
-        .end = "</blockquote>",
+        .begin = "<blockquote>\n",
+        .end = "</blockquote>\n",
     },
     @"break": Tag = .{
-        .begin = "<br />",
+        .begin = "<br />\n",
         .end = "",
     },
     code: Tag = .{
-        .begin = "<pre>",
-        .end = "</pre>",
+        .begin = "<pre>\n",
+        .end = "</pre>\n",
     },
     emphasis: Tag = .{
         .begin = "<em>",
@@ -44,12 +44,12 @@ const Tags = struct {
         .end = "</code>",
     },
     list: Tag = .{
-        .begin = "<ul>", // TODO: impl ordered lists
-        .end = "</ul>",
+        .begin = "<ul>\n", // TODO: impl ordered lists
+        .end = "</ul>\n",
     },
     list_item: Tag = .{
-        .begin = "<li>",
-        .end = "</li>",
+        .begin = "<li>\n",
+        .end = "</li>\n",
     },
     paragraph: Tag = .{
         .begin = "<p>\n",
