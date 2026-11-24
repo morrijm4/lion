@@ -106,6 +106,11 @@ pub fn renderNode(
                 else => @panic("Invalid depth"),
             }
         },
+        .code => {
+            try writer.writeAll(t.begin);
+            try self.renderIndent(writer, depth + 1);
+            try writer.writeAll("<code>\n");
+        },
         else => try writer.writeAll(t.begin),
     }
 
@@ -136,6 +141,12 @@ pub fn renderNode(
                 6 => try writer.writeAll("</h6>\n"),
                 else => @panic("Invalid depth"),
             }
+        },
+        .code => {
+            try self.renderIndent(writer, depth + 1);
+            try writer.writeAll("</code>\n");
+            try self.renderIndent(writer, depth);
+            try writer.writeAll(t.end);
         },
         else => {
             try self.renderIndent(writer, depth);

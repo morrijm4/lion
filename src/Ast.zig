@@ -12,12 +12,7 @@ root: *Node,
 
 const MAX_HEADING_DEPTH = 6;
 
-pub const BuildError = Allocator.Error || error{
-    ReadFailed,
-    StreamTooLong,
-    Invalid,
-    Unsupported,
-};
+pub const BuildError = Allocator.Error || Io.Reader.DelimiterError;
 
 pub fn deinit(self: Ast) void {
     self.arena.deinit();
@@ -31,12 +26,18 @@ pub fn build(reader: *Io.Reader, gpa: Allocator) BuildError!Ast {
     const root: *Node = try .create(a, Root{});
     var current: ?*Node = null;
 
+    // TODO: Handle lines longer than internal buffer
     while (try reader.takeDelimiter('\n')) |line| {
         const trimmed = trim(line);
 
         if (trimmed.len == 0) {
             current = null;
-        } else if (trimmed[0] == '>') {
+            continue;
+        }
+
+        const first_char = trimmed[0];
+
+        if (first_char == '>') {
             if (current == null or current.?.* != .blockquote) {
                 current = try .create(a, Blockquote{});
                 try root.children().?.append(a, current.?);
@@ -45,7 +46,7 @@ pub fn build(reader: *Io.Reader, gpa: Allocator) BuildError!Ast {
             const value = try a.dupe(u8, item);
             const text: *Node = try .create(a, Text{ .value = value });
             try current.?.children().?.append(a, text);
-        } else if (trimmed[0] == '-') {
+        } else if (first_char == '-') {
             if (current == null or current.?.* != .list) {
                 current = try .create(a, List{});
                 try root.children().?.append(a, current.?);
@@ -57,9 +58,45 @@ pub fn build(reader: *Io.Reader, gpa: Allocator) BuildError!Ast {
 
             const value = try a.dupe(u8, item);
             try li.children().?.append(a, try .create(a, Text{ .value = value }));
-        } else if (trimmed[0] == '#') {
-            try root.children().?.append(a, try buildHeading(a, trimmed));
-        } else if (std.ascii.isAlphabetic(trimmed[0])) {
+        } else if (first_char == '#') {
+            var depth: u3 = 0;
+            while (depth <= MAX_HEADING_DEPTH and depth < line.len) : (depth += 1) {
+                if (line[depth] != '#') break;
+            }
+
+            assert(depth >= 1);
+            assert(depth <= 6);
+
+            const heading: *Node = try .create(a, Heading{ .depth = depth });
+            const title = try a.dupe(u8, trim(line[depth..]));
+            const text: *Node = try .create(a, Text{ .value = title });
+            try heading.children().?.append(a, text);
+            try root.children().?.append(a, heading);
+        } else if (std.mem.startsWith(u8, trimmed, "```")) {
+            current = null;
+
+            var lines: std.ArrayList([]const u8) = .empty;
+
+            // TODO: Handle long lines
+            while (try reader.takeDelimiter('\n')) |l| {
+                if (std.mem.eql(u8, trim(l), "```")) {
+                    break;
+                }
+                try lines.append(a, l);
+                try lines.append(a, "\n");
+            }
+            var value = try std.mem.concat(a, u8, lines.items);
+            value = try std.mem.replaceOwned(u8, a, value, "&", "&amp;");
+            value = try std.mem.replaceOwned(u8, a, value, "<", "&lt;");
+
+            const node: *Node = try .create(a, Code{ .value = value });
+
+            if (trimmed.len > 3) {
+                node.code.lang = try a.dupe(u8, trimmed[3..]);
+            }
+
+            try root.children().?.append(a, node);
+        } else {
             if (current == null or current.?.* != .paragraph) {
                 current = try .create(a, Paragraph{});
                 try root.children().?.append(a, current.?);
@@ -67,29 +104,10 @@ pub fn build(reader: *Io.Reader, gpa: Allocator) BuildError!Ast {
 
             const text: *Node = try .create(a, Text{ .value = trim(trimmed) });
             try current.?.children().?.append(a, text);
-        } else {
-            return error.Unsupported;
         }
     }
 
     return .{ .arena = arena, .root = root };
-}
-
-const BuildHeadingError = Allocator.Error || error{Invalid};
-
-pub fn buildHeading(arena: Allocator, line: []const u8) BuildHeadingError!*Node {
-    var depth: u3 = 0;
-    while (depth <= MAX_HEADING_DEPTH and depth < line.len) : (depth += 1) {
-        if (line[depth] != '#') break;
-    }
-
-    assert(depth >= 1);
-    assert(depth <= 6);
-
-    const heading: *Node = try .create(arena, Heading{ .depth = depth });
-    const title = try arena.dupe(u8, trim(line[depth..]));
-    try heading.children().?.append(arena, try .create(arena, Text{ .value = title }));
-    return heading;
 }
 
 fn trim(str: []const u8) []const u8 {
