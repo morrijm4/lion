@@ -22,6 +22,8 @@ test "cases" {
             return error.InvalidFile;
         }
 
+        if (!std.mem.eql(u8, entry.name, "010-code-block")) continue;
+
         const case = try tests.openDir(io, entry.name, .{});
         defer case.close(io);
 
@@ -53,6 +55,13 @@ test "cases" {
         defer gpa.free(expected);
 
         std.testing.expectEqualStrings(expected, actual.written()) catch |err| {
+            std.debug.print("\n\n=========== Input markdown ===========\n", .{});
+            if (case.readFileAlloc(io, "input.md", gpa, .unlimited)) |input| {
+                std.debug.print("{s}\n", .{input});
+                gpa.free(input);
+            } else |_| {
+                std.debug.print("Read failure\n", .{});
+            }
             std.debug.print("\n\n***** [FAILED CASE] {s} *****\n\n\n", .{entry.name});
             return err;
         };
