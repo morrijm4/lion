@@ -4,8 +4,7 @@ const lion = @import("lion");
 
 pub fn main(init: std.process.Init) !void {
     var stdout_buf: [1024]u8 = undefined;
-    const stdout_file = Io.File.stdout();
-    var stdout_writer = stdout_file.writer(init.io, &stdout_buf);
+    var stdout_writer = Io.File.stdout().writer(init.io, &stdout_buf);
     const stdout = &stdout_writer.interface;
 
     const args = try init.minimal.args.toSlice(init.arena.allocator());

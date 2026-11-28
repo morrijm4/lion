@@ -4,11 +4,7 @@ const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
 const Type = @import("Type.zig").Type;
-const code = @import("parser/code.zig");
-const list = @import("parser/list.zig");
-const heading = @import("parser/heading.zig");
-const paragraph = @import("parser/paragraph.zig");
-const blockquote = @import("parser/blockquote.zig");
+const parser_utils = @import("parser/utils.zig");
 
 pub const Ast = @This();
 
@@ -28,16 +24,6 @@ pub fn build(reader: *Io.Reader, gpa: Allocator) BuildError!Ast {
 
     var root: Root = .{};
 
-    // TODO: Handle lines longer than internal buffer
-    while (try reader.takeDelimiter('\n')) |line| {
-        const node = try parse(a, reader, line);
-        try root.children.append(a, node);
-    }
-
-    return .{ .arena = arena, .root = try .create(a, root) };
-}
-
-fn parse(arena: Allocator, reader: *Io.Reader, line: []const u8) BuildError!*Node {
     const parsers = .{
         @import("parser/code.zig"),
         @import("parser/list.zig"),
@@ -46,12 +32,41 @@ fn parse(arena: Allocator, reader: *Io.Reader, line: []const u8) BuildError!*Nod
         @import("parser/paragraph.zig"),
     };
 
-    inline for (parsers) |parser| {
-        if (parser.is(line)) return parser.parse(arena, reader, line);
+    const MAX_LINES = 1024 * 1024;
+
+    // TODO: Handle lines longer than internal buffer
+    var i: u32 = 0;
+    while (try parser_utils.peekLine(reader)) |line| : (i += 1) {
+        if (i >= MAX_LINES) {
+            std.log.err("Max lines reached", .{});
+            break;
+        }
+
+        // std.debug.print("{s}", .{line});
+        if (parser_utils.trim(line).len == 0) {
+            reader.toss(line.len);
+            continue;
+        }
+
+        const node: *Node = blk: {
+            inline for (parsers) |parser| {
+                if (parser.valid(line)) break :blk try parser.parse(a, reader);
+            }
+
+            reader.toss(line.len);
+
+            std.log.warn("Unsupported: {s}", .{line});
+            break :blk try .create(a, Text{ .value = try a.dupe(u8, line) });
+        };
+
+        try root.children.append(a, node);
     }
 
-    std.log.warn("Unsupported: {s}", .{line});
-    return try .create(arena, Text{ .value = try arena.dupe(u8, line) });
+    const node: *Node = try .create(a, root);
+    return .{
+        .arena = arena,
+        .root = node,
+    };
 }
 
 fn trim(str: []const u8) []const u8 {
